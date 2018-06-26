@@ -5,6 +5,7 @@ RUN go get \
     github.com/jmespath/go-jmespath \
     github.com/hashicorp/golang-lru \
     github.com/go-ini/ini
+
 RUN mkdir /app
 
 ADD . /app/
@@ -13,7 +14,6 @@ WORKDIR /app
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o overrun .
 
 FROM scratch
-VOLUME /root/.aws
 COPY --from=build /app/overrun /root/overrun
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 ENTRYPOINT ["/root/overrun"]
