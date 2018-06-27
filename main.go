@@ -69,7 +69,7 @@ FARGATE                         : Specifying the following arguments implies usi
                                   The default VPC security group is selected by default.
   -f:host | --fargate:host      : Build network configuration to match a running EC2 instance. This will set desired security groups and subnets based on
                                   the particular configuration of the host.
-  -f:sg	  | --fargate:sg        : Specify additional security groups by 'sg-' ID or by tag=value, to be attached to the task.
+  -f:sg   | --fargate:sg        : Specify additional security groups by 'sg-' ID or by tag=value, to be attached to the task.
 `
 	fmt.Printf(argHelp, filepath.Base(os.Args[0]))
 }
