@@ -138,7 +138,9 @@ func GoTailLogs(s *cloudwatchlogs.CloudWatchLogs, l *AwslogsLocation, group *syn
 			if !ErrorIsResourceNotFound(events.Err()) {
 				log.Printf("WARNING: log stream error: %s\n", events.Err())
 			}
-		} else if firstRun {
+		}
+
+		if firstRun {
 			firstRun = false
 			group.Done()
 		}

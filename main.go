@@ -46,6 +46,7 @@ func usage() {
   -x | --dry-run                : Construct aws-cli command but print command instead of running it.
   -w | --wait                   : Run task and wait for completion.
   -l | --stream-log             : Run task and begin tailing log stream.
+       --no-timeout             : Ignore timeouts while waiting for task completion.
   -e | --env <name[=value]>     : Override environment variables. If =value is not specified, the value for the specified name will be read from this
                                   command's environment.
        --env-file               : Override container environment variables using a specifed env-file. 
@@ -93,6 +94,8 @@ type ParsedArgs struct {
 	DryRun bool
 
 	WaitStopped, StreamLog bool
+
+	NoTimeout bool
 
 	Cpu int64
 
@@ -145,6 +148,7 @@ func parseArgs() ParsedArgs {
 	dryRun := false
 	streamLog := false
 	waitStopped := false
+	noTimeout := false
 	execRoleArn := ""
 	taskRoleArn := ""
 	shellPrefix := ""
@@ -259,6 +263,8 @@ ArgLoop:
 			streamLog = !isNoOpt
 		case "-w", "--wait":
 			waitStopped = !isNoOpt
+		case "--timeout":
+			noTimeout = isNoOpt
 		case "-h", "--help":
 			usage()
 			os.Exit(0)
@@ -320,6 +326,7 @@ ArgLoop:
 		DryRun:            dryRun,
 		StreamLog:         streamLog,
 		WaitStopped:       waitStopped,
+		NoTimeout:         noTimeout,
 		Cpu:               cpu,
 		Memory:            memory,
 		MemoryReservation: memoryReservation,
@@ -531,7 +538,18 @@ func main() {
 				// wait for task to stop for good
 				err := ecss.WaitUntilTasksStopped(&taskArnInput)
 				if err != nil {
-					log.Fatal(err)
+					if prefs.NoTimeout && strings.HasPrefix(err.Error(), aws.WaiterResourceNotReadyErrorCode) {
+						log.Println("Ignoring timeout error. ", err)
+						if foreverErr := ecss.WaitUntilTasksStoppedWithContext(aws.BackgroundContext(),
+							&taskArnInput, func(waiter *aws.Waiter) {
+								waiter.MaxAttempts = 0
+
+							}); foreverErr != nil {
+							log.Fatal(foreverErr)
+						}
+					} else {
+						log.Fatal(err)
+					}
 				}
 
 				// now wait for the GoTailLogs routine to notify completion of at least one filter-log-events request
