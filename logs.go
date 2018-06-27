@@ -25,6 +25,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 type AwslogsLocation struct {
@@ -76,6 +77,10 @@ func ErrorIsAlreadyExists(err error) bool {
 
 func ErrorIsResourceNotFound(err error) bool {
 	return strings.HasPrefix(err.Error(), cloudwatchlogs.ErrCodeResourceNotFoundException)
+}
+
+func ErrorIsThrottlingException(err error) bool {
+	return aws.IsErrorThrottle(err)
 }
 
 func GetOrCreateStream(cws *cloudwatchlogs.CloudWatchLogs, loc *AwslogsLocation) (*cloudwatchlogs.LogStream, error) {
@@ -135,7 +140,7 @@ func GoTailLogs(s *cloudwatchlogs.CloudWatchLogs, l *AwslogsLocation, group *syn
 		}
 
 		if events.Err() != nil {
-			if !ErrorIsResourceNotFound(events.Err()) {
+			if !ErrorIsResourceNotFound(events.Err()) && !ErrorIsThrottlingException(events.Err()) {
 				log.Printf("WARNING: log stream error: %s\n", events.Err())
 			}
 		}
