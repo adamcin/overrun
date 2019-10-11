@@ -1,6 +1,7 @@
-FROM golang:1.10.3-alpine as build
-RUN apk add --no-cache --virtual git
+FROM golang:1.13.1 as build
+#RUN apk add --no-cache --virtual git
 RUN go get \
+    golang.org/x/net/http2 \
     github.com/aws/aws-sdk-go-v2 \
     github.com/jmespath/go-jmespath \
     github.com/hashicorp/golang-lru \

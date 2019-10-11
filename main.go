@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -63,6 +64,7 @@ func usage() {
 
 FARGATE                         : Specifying the following arguments implies using the FARGATE launch type.
   -f      | --fargate           : Activates fargate execution and accepts 0-n resource filters that apply to all taggable EC2 objects.
+  -f:pv   | --fargate:platform  : Specify the Fargate platform version. Defaults to the latest available.
   -f:ip   | --fargate:ip        : Request Fargate assign a public IP address to the container.
   -f:vpc  | --fargate:vpc       : Filter network config resources by VPCs matching the specified VPC filter. 
   -f:net  | --fargate:net       : Choose network configs based on a subnet ID or a tag=value pair attached to the desired subnet(s).
@@ -135,6 +137,8 @@ type ParsedArgs struct {
 	OverridesCmd bool
 
 	CmdOverride []string
+
+	PlatformVersion *string
 }
 
 const NoOptPrefix = "--no-"
@@ -175,6 +179,7 @@ func parseArgs() ParsedArgs {
 	doFilterSgs := false
 	var vpcNetFilters []ec2.Filter
 	var vpcHostFilters []ec2.Filter
+	var platformVersion *string
 
 	readFilterArgs := func(defaultFilter *string, optToEnd ...string) (int, []ec2.Filter) {
 		var filters []ec2.Filter
@@ -307,6 +312,14 @@ ArgLoop:
 			parsed, filters := readFilterArgs(aws.String(FilterTagName), os.Args[i+1:]...)
 			vpcHostFilters = append(vpcHostFilters, filters...)
 			i = i + parsed
+		case "-f:pv", "--fargate:platformVersion":
+			if !isNoOpt {
+				pv := os.Args[i+1]
+				i++
+				platformVersion = &pv
+			} else {
+				platformVersion = nil
+			}
 		case "--":
 			overridesCmd = true
 			cmdOverride = append(cmdOverride, os.Args[i+1:]...)
@@ -346,10 +359,11 @@ ArgLoop:
 		VpcHostFilters:    vpcHostFilters,
 		NetPublicIp:       netPublicIp,
 		OverridesCmd:      overridesCmd,
-		CmdOverride:       cmdOverride}
+		CmdOverride:       cmdOverride,
+		PlatformVersion:   platformVersion}
 }
 
-func sigintStopTask(sigs chan os.Signal, s *ecs.ECS, taskArn *string, cluster *string) {
+func sigintStopTask(sigs chan os.Signal, s *ecs.Client, taskArn *string, cluster *string) {
 	// create the stop-task input before waiting on sigs, so that it is ready to send ASAP.
 	stopInput := ecs.StopTaskInput{
 		Cluster: cluster,
@@ -366,7 +380,7 @@ SignalLoop:
 		}
 
 		if sig == syscall.SIGINT {
-			if _, err := req.Send(); err != nil {
+			if _, err := req.Send(context.TODO()); err != nil {
 				// sigint
 				log.Printf("ERROR: SIGINT failed to stop task %s! keep mashing that ctrl-c!\n", *taskArn)
 			} else {
@@ -407,7 +421,7 @@ func main() {
 
 	dtdInput := ecs.DescribeTaskDefinitionInput{TaskDefinition: &prefs.TaskDef}
 	ecss := ecs.New(awsCfg)
-	dtdResult, dtdErr := ecss.DescribeTaskDefinitionRequest(&dtdInput).Send()
+	dtdResult, dtdErr := ecss.DescribeTaskDefinitionRequest(&dtdInput).Send(context.TODO())
 	if dtdErr != nil {
 		log.Fatal(dtdErr)
 	}
@@ -489,7 +503,7 @@ func main() {
 	if prefs.DryRun {
 		log.Println(runTaskInput.String())
 	} else {
-		out, err := ecss.RunTaskRequest(runTaskInput).Send()
+		out, err := ecss.RunTaskRequest(runTaskInput).Send(context.TODO())
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -508,7 +522,7 @@ func main() {
 			signal.Notify(sigs, syscall.SIGINT)
 
 			if prefs.WaitStopped {
-				err := ecss.WaitUntilTasksStopped(&taskArnInput)
+				err := ecss.WaitUntilTasksStopped(context.TODO(), &taskArnInput)
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -536,11 +550,11 @@ func main() {
 				go GoTailLogs(cws, loc, &wg)
 
 				// wait for task to stop for good
-				err := ecss.WaitUntilTasksStopped(&taskArnInput)
+				err := ecss.WaitUntilTasksStopped(context.TODO(), &taskArnInput)
 				if err != nil {
 					if prefs.NoTimeout && strings.HasPrefix(err.Error(), aws.WaiterResourceNotReadyErrorCode) {
 						log.Println("Ignoring timeout error. ", err)
-						if foreverErr := ecss.WaitUntilTasksStoppedWithContext(aws.BackgroundContext(),
+						if foreverErr := ecss.WaitUntilTasksStopped(context.Background(),
 							&taskArnInput, func(waiter *aws.Waiter) {
 								waiter.MaxAttempts = 0
 
@@ -556,7 +570,7 @@ func main() {
 				wg.Wait()
 
 				// describe task final state to report reason and exit code of primary container
-				describeResult, describeErr := ecss.DescribeTasksRequest(&taskArnInput).Send()
+				describeResult, describeErr := ecss.DescribeTasksRequest(&taskArnInput).Send(context.TODO())
 				if describeErr != nil {
 					log.Fatal(describeErr)
 				} else {
@@ -596,7 +610,7 @@ func restrictToVpcs(prefs *ParsedArgs, ctx *ExecutionContext) (*ec2.Filter, erro
 		}
 		ec2s := ec2.New(*ctx.AwsConfig)
 		input := ec2.DescribeVpcsInput{Filters: append(prefs.VpcFilters, ctx.AnyFilters...)}
-		result, err := ec2s.DescribeVpcsRequest(&input).Send()
+		result, err := ec2s.DescribeVpcsRequest(&input).Send(context.TODO())
 		if err != nil {
 			return nil, err
 		} else if len(result.Vpcs) > 0 {
@@ -625,7 +639,7 @@ func secGroupsQuery(ctx *ExecutionContext, filters []ec2.Filter) ([]string, erro
 	ec2s := ec2.New(*ctx.AwsConfig)
 	input := ec2.DescribeSecurityGroupsInput{Filters: append(filters, ctx.AnyFilters...)}
 
-	result, err := ec2s.DescribeSecurityGroupsRequest(&input).Send()
+	result, err := ec2s.DescribeSecurityGroupsRequest(&input).Send(context.TODO())
 	if err != nil {
 		return nil, err
 	} else {
@@ -640,12 +654,12 @@ func secGroupsQuery(ctx *ExecutionContext, filters []ec2.Filter) ([]string, erro
 func vpcConfigForCluster(prefs *ParsedArgs, ctx *ExecutionContext) (ecs.NetworkConfiguration, error) {
 	ecss := ecs.New(*ctx.AwsConfig)
 	ciInput := ecs.ListContainerInstancesInput{Cluster: &prefs.Cluster}
-	ciResult, ciErr := ecss.ListContainerInstancesRequest(&ciInput).Send()
+	ciResult, ciErr := ecss.ListContainerInstancesRequest(&ciInput).Send(context.TODO())
 	if ciErr != nil {
 		return ecs.NetworkConfiguration{}, ciErr
 	} else if len(ciResult.ContainerInstanceArns) > 0 {
 		input := ecs.DescribeContainerInstancesInput{Cluster: &prefs.Cluster, ContainerInstances: ciResult.ContainerInstanceArns}
-		result, err := ecss.DescribeContainerInstancesRequest(&input).Send()
+		result, err := ecss.DescribeContainerInstancesRequest(&input).Send(context.TODO())
 		if err != nil {
 			return ecs.NetworkConfiguration{}, err
 		} else if len(result.ContainerInstances) > 0 {
@@ -670,7 +684,7 @@ func vpcConfigForNet(prefs *ParsedArgs, ctx *ExecutionContext, filters []ec2.Fil
 	dsInput.Filters = filters
 	dsInput.Filters = append(dsInput.Filters, ctx.AnyFilters...)
 
-	dsResult, dsErr := ec2s.DescribeSubnetsRequest(&dsInput).Send()
+	dsResult, dsErr := ec2s.DescribeSubnetsRequest(&dsInput).Send(context.TODO())
 	if dsErr != nil {
 		log.Println(dsInput.Filters[0].String())
 		return ecs.NetworkConfiguration{}, dsErr
@@ -714,7 +728,7 @@ func vpcConfigForHost(prefs *ParsedArgs, ctx *ExecutionContext, filters []ec2.Fi
 	diInput.Filters = filters
 	diInput.Filters = append(diInput.Filters, ctx.AnyFilters...)
 
-	diResult, diErr := ec2s.DescribeInstancesRequest(&diInput).Send()
+	diResult, diErr := ec2s.DescribeInstancesRequest(&diInput).Send(context.TODO())
 	if diErr != nil {
 		return ecs.NetworkConfiguration{}, diErr
 	}
@@ -831,6 +845,7 @@ func buildRunTaskInput(prefs *ParsedArgs, ctx *ExecutionContext) (*ecs.RunTaskIn
 		if err != nil {
 			return nil, err
 		}
+		input.PlatformVersion = prefs.PlatformVersion
 		input.LaunchType = ecs.LaunchTypeFargate
 		input.NetworkConfiguration = &netConfig
 	} else {

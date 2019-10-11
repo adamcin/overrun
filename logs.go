@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
@@ -83,17 +84,17 @@ func ErrorIsThrottlingException(err error) bool {
 	return aws.IsErrorThrottle(err)
 }
 
-func GetOrCreateStream(cws *cloudwatchlogs.CloudWatchLogs, loc *AwslogsLocation) (*cloudwatchlogs.LogStream, error) {
+func GetOrCreateStream(cws *cloudwatchlogs.Client, loc *AwslogsLocation) (*cloudwatchlogs.LogStream, error) {
 	clgInput := cloudwatchlogs.CreateLogGroupInput{
 		LogGroupName: loc.LogGroupName}
-	if _, err := cws.CreateLogGroupRequest(&clgInput).Send(); err != nil && !ErrorIsAlreadyExists(err) {
+	if _, err := cws.CreateLogGroupRequest(&clgInput).Send(context.TODO()); err != nil && !ErrorIsAlreadyExists(err) {
 		return nil, err
 	}
 
 	clsInput := cloudwatchlogs.CreateLogStreamInput{
 		LogGroupName:  loc.LogGroupName,
 		LogStreamName: loc.LogStreamName}
-	if _, err := cws.CreateLogStreamRequest(&clsInput).Send(); err != nil && !ErrorIsAlreadyExists(err) {
+	if _, err := cws.CreateLogStreamRequest(&clsInput).Send(context.TODO()); err != nil && !ErrorIsAlreadyExists(err) {
 		return nil, err
 	}
 
@@ -101,7 +102,7 @@ func GetOrCreateStream(cws *cloudwatchlogs.CloudWatchLogs, loc *AwslogsLocation)
 	logInput.LogGroupName = loc.LogGroupName
 	logInput.LogStreamNamePrefix = loc.LogStreamName
 
-	result, err := cws.DescribeLogStreamsRequest(&logInput).Send()
+	result, err := cws.DescribeLogStreamsRequest(&logInput).Send(context.TODO())
 	if err != nil {
 		return nil, err
 	} else if len(result.LogStreams) > 0 {
@@ -111,7 +112,7 @@ func GetOrCreateStream(cws *cloudwatchlogs.CloudWatchLogs, loc *AwslogsLocation)
 	}
 }
 
-func GoTailLogs(s *cloudwatchlogs.CloudWatchLogs, l *AwslogsLocation, group *sync.WaitGroup) {
+func GoTailLogs(s *cloudwatchlogs.Client, l *AwslogsLocation, group *sync.WaitGroup) {
 	cache, _ := lru.New(10000)
 	firstRun := true
 	startTime := int64(0)
@@ -123,8 +124,8 @@ func GoTailLogs(s *cloudwatchlogs.CloudWatchLogs, l *AwslogsLocation, group *syn
 			StartTime:      &startTime}
 
 		eventsRequest := s.FilterLogEventsRequest(&flInput)
-		events := (&eventsRequest).Paginate()
-		for events.Next() {
+		events := cloudwatchlogs.NewFilterLogEventsPaginator(eventsRequest)
+		for events.Next(context.TODO()) {
 			eventsPage := events.CurrentPage()
 			for _, event := range eventsPage.Events {
 				if event.EventId == nil {
