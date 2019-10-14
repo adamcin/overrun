@@ -312,7 +312,7 @@ ArgLoop:
 			parsed, filters := readFilterArgs(aws.String(FilterTagName), os.Args[i+1:]...)
 			vpcHostFilters = append(vpcHostFilters, filters...)
 			i = i + parsed
-		case "-f:pv", "--fargate:platformVersion":
+		case "-f:pv", "--fargate:platform":
 			if !isNoOpt {
 				pv := os.Args[i+1]
 				i++
